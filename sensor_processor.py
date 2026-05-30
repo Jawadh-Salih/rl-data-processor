@@ -1,16 +1,9 @@
-# I want to generate a stream of data.
-# Basically this should run it's own process and generate random data and save and
-# should have send function process the data.This generate 100, and sends.
-#
-
+import argparse
 from datetime import datetime, timedelta
 from multiprocessing import Process, Queue
 from random import randint, random
 from statistics import mean, stdev
 from time import sleep
-
-CHUNK_SIZE = 5
-
 
 sensor_memory = list()
 
@@ -24,13 +17,12 @@ class SensorData:
         return {"value": self.value, "timestamp": self.timestamp}
 
 
-def sensor_worker(queue: Queue, start_time, offset):
+def sensor_worker(queue: Queue, start_time, offset, mode):
     current_time = start_time
     sensing_interval = 1
-    # while True:
-    for i in range(50):
-        # I n±eed to deliberately miss some data.
-        # I need to deliberate corrupt some data.
+    iterator = iter(int, 1) if mode == "i" else iter(range(mode))
+    for i in iterator:
+        # Generate missing (5% probability) and corrupted (10% probability) data.
         data = SensorData(randint(0, 100), current_time)
         chance = random()
         if chance < 0.05:  # Probability of missing data
@@ -44,13 +36,10 @@ def sensor_worker(queue: Queue, start_time, offset):
         sleep(sensing_interval)
 
 
-def data_worker(queue: Queue):
+def data_worker(queue: Queue, chunk_size):
     while True:
-        # for i in  range(10):
-        # Get the first 100 data from the queue and remove them from the queue
-
         chunk = list()
-        for i in range(CHUNK_SIZE):
+        for i in range(chunk_size):
             d = queue.get()
             chunk.append(d)
 
@@ -69,14 +58,42 @@ def data_worker(queue: Queue):
         print(f"Missing data from the block : {missing_count}")
         print(f"Corrupted data from the block : {corrupted_count}")
         sleep(1)
-        # TODO corrupted
 
 
 if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description="Sensor data simulator and processor")
+    parser.add_argument(
+        "mode", help="'i' for infinite mode, or a number for finite mode (e.g. 50)"
+    )
+    parser.add_argument(
+        "--chunk-size",
+        type=int,
+        default=None,
+        help="Number of samples per chunk (default: 10%% of samples in finite mode, 5 in infinite mode)",
+    )
+    args = parser.parse_args()
+
+    if args.mode == "i":
+        mode = "i"
+        chunk_size = args.chunk_size if args.chunk_size is not None else 100
+    else:
+        mode = int(args.mode)
+        chunk_size = (
+            args.chunk_size if args.chunk_size is not None else max(1, mode // 10)
+        )
+        if mode < chunk_size:
+            raise ValueError(
+                f"Number of samples ({mode}) must be >= chunk size ({chunk_size})"
+            )
+        if mode % chunk_size != 0:
+            raise ValueError(
+                f"Number of samples ({mode}) must be a multiple of chunk size ({chunk_size})"
+            )
+
     memory_size = 0
     q = Queue()
-    sensor = Process(target=sensor_worker, args=(q, datetime.now(), memory_size))
-    processor = Process(target=data_worker, args=(q,))
+    sensor = Process(target=sensor_worker, args=(q, datetime.now(), memory_size, mode))
+    processor = Process(target=data_worker, args=(q, chunk_size))
 
     sensor.start()
     processor.start()
